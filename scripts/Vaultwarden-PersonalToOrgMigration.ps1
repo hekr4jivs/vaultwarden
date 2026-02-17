@@ -1,14 +1,15 @@
-# Vaultwarden-PersonalToOrgMigration.ps1
+﻿# Vaultwarden-PersonalToOrgMigration.ps1
 # Migriert Items vom persönlichen Vault zu einer Organisation
 # Erstellt Collections basierend auf der Ordnerstruktur
-# KORRIGIERT: Verwendet org-collection statt collection
+# Verwendet 'bw share' zum Verschieben (nicht 'bw edit item', das kann keine Org-Zuweisung)
 
 param(
     [string]$OrganizationId = "89f44255-10ff-455f-96e1-f4a4470f16e4",
     [switch]$DryRun = $false,
     [switch]$SkipConfirmation = $false,
     [string]$AnalysisFile = "",
-    [string]$DefaultCollection = "Imported-Items"
+    [string]$DefaultCollection = "Imported-Items",
+    [string]$Session = ""
 )
 
 Write-Host "=== VAULTWARDEN PERSONAL → ORGANISATION MIGRATION ===" -ForegroundColor Magenta
@@ -32,15 +33,19 @@ if (-not $SkipConfirmation -and -not $DryRun) {
 }
 
 # Session check
-try {
-    $session = bw unlock --raw
-    if (-not $session) {
-        Write-Host "FEHLER: Bitwarden nicht entsperrt. Führe 'bw unlock' aus." -ForegroundColor Red
+if ($Session) {
+    $session = $Session
+} else {
+    try {
+        $session = bw unlock --raw
+        if (-not $session) {
+            Write-Host "FEHLER: Bitwarden nicht entsperrt. Führe 'bw unlock' aus oder nutze -Session <token>." -ForegroundColor Red
+            exit 1
+        }
+    } catch {
+        Write-Host "FEHLER: Bitwarden CLI nicht verfügbar." -ForegroundColor Red
         exit 1
     }
-} catch {
-    Write-Host "FEHLER: Bitwarden CLI nicht verfügbar." -ForegroundColor Red
-    exit 1
 }
 
 Write-Host "✅ Bitwarden Session aktiv" -ForegroundColor Green
@@ -212,31 +217,38 @@ foreach ($migration in $migrations) {
     
     foreach ($item in $items) {
         try {
-            # Item zur Organisation verschieben
-            $item.organizationId = $OrganizationId
-            $item.collectionIds = @($collectionId)
-            $item.folderId = $null  # Entferne persönliche Ordner-Zuordnung
-            
-            # Base64-encoded JSON für bw edit item
-            $itemJson = $item | ConvertTo-Json -Depth 10 -Compress
-            $itemBytes = [System.Text.Encoding]::UTF8.GetBytes($itemJson)
-            $encodedItem = [System.Convert]::ToBase64String($itemBytes)
-            $result = bw edit item $item.id $encodedItem --session $session 2>$null | ConvertFrom-Json
-            
-            if ($result -and $result.id) {
+            # Item zur Organisation verschieben mit bw share
+            # bw share <itemId> <organizationId> <encodedCollectionIds>
+            $collectionIdsJson = ConvertTo-Json @($collectionId) -Compress
+            $collectionIdsBytes = [System.Text.Encoding]::UTF8.GetBytes($collectionIdsJson)
+            $encodedCollectionIds = [System.Convert]::ToBase64String($collectionIdsBytes)
+
+            $result = bw share $item.id $OrganizationId $encodedCollectionIds --session $session 2>&1
+
+            # bw share gibt das Item als JSON zurück bei Erfolg
+            $resultObj = $null
+            try { $resultObj = $result | ConvertFrom-Json } catch {}
+
+            if ($resultObj -and $resultObj.id) {
                 $itemSuccess++
                 Write-Host "    ✓ $($item.name)" -ForegroundColor Gray
             } else {
-                Write-Host "    ❌ Fehlgeschlagen: $($item.name)" -ForegroundColor Red
-                $itemFailed++
+                # Prüfe ob Item bereits in Organisation ist
+                if ($result -match "already belongs to an organization|already shared") {
+                    Write-Host "    ⏩ Bereits in Organisation: $($item.name)" -ForegroundColor DarkGray
+                    $itemSuccess++
+                } else {
+                    Write-Host "    ❌ Fehlgeschlagen: $($item.name) - $result" -ForegroundColor Red
+                    $itemFailed++
+                }
             }
         } catch {
             Write-Host "    ❌ Fehler bei $($item.name): $_" -ForegroundColor Red
             $itemFailed++
         }
-        
+
         # Kurze Pause um API nicht zu überlasten
-        Start-Sleep -Milliseconds 100
+        Start-Sleep -Milliseconds 200
     }
     
     Write-Host "  📊 Collection-Ergebnis: $itemSuccess erfolgreich, $itemFailed fehlgeschlagen" -ForegroundColor White

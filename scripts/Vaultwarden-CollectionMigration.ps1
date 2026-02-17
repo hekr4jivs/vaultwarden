@@ -1,4 +1,4 @@
-# Vaultwarden-CollectionMigration.ps1
+﻿# Vaultwarden-CollectionMigration.ps1
 # Migriert Items basierend auf erkennbarer Ordnerstruktur zu entsprechenden Collections
 # ACHTUNG: Dieses Script verändert die Organisation! Backup vorher erstellen!
 # KORRIGIERT: Verwendet org-collection statt collection
@@ -7,7 +7,8 @@ param(
     [string]$OrganizationId = "89f44255-10ff-455f-96e1-f4a4470f16e4",
     [switch]$DryRun = $false,
     [switch]$SkipConfirmation = $false,
-    [string]$AnalysisFile = ""
+    [string]$AnalysisFile = "",
+    [string]$Session = ""
 )
 
 Write-Host "=== VAULTWARDEN COLLECTION MIGRATION ===" -ForegroundColor Magenta
@@ -31,15 +32,19 @@ if (-not $SkipConfirmation -and -not $DryRun) {
 }
 
 # Session check
-try {
-    $session = bw unlock --raw
-    if (-not $session) {
-        Write-Host "FEHLER: Bitwarden nicht entsperrt. Führe 'bw unlock' aus." -ForegroundColor Red
+if ($Session) {
+    $session = $Session
+} else {
+    try {
+        $session = bw unlock --raw
+        if (-not $session) {
+            Write-Host "FEHLER: Bitwarden nicht entsperrt. Führe 'bw unlock' aus oder nutze -Session <token>." -ForegroundColor Red
+            exit 1
+        }
+    } catch {
+        Write-Host "FEHLER: Bitwarden CLI nicht verfügbar oder nicht eingeloggt." -ForegroundColor Red
         exit 1
     }
-} catch {
-    Write-Host "FEHLER: Bitwarden CLI nicht verfügbar oder nicht eingeloggt." -ForegroundColor Red
-    exit 1
 }
 
 Write-Host "✅ Bitwarden Session aktiv" -ForegroundColor Green
