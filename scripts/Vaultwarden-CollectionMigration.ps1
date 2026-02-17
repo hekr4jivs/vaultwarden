@@ -1,7 +1,7 @@
 ﻿# Vaultwarden-CollectionMigration.ps1
 # Migriert Items basierend auf erkennbarer Ordnerstruktur zu entsprechenden Collections
 # ACHTUNG: Dieses Script verändert die Organisation! Backup vorher erstellen!
-# KORRIGIERT: Verwendet org-collection statt collection
+# Verwendet 'bw edit item-collections' für Collection-Zuweisungen (nicht 'bw edit item')
 
 param(
     [string]$OrganizationId = "89f44255-10ff-455f-96e1-f4a4470f16e4",
@@ -202,20 +202,26 @@ foreach ($migration in $migrations) {
     
     foreach ($item in $items) {
         try {
-            # Collection-Zuordnung aktualisieren
-            $item.collectionIds = @($collectionId)
+            # Collection-Zuordnung via bw edit item-collections
+            # Behält bestehende Collections und fügt die neue hinzu
+            $newCollIds = @($collectionId)
+            if ($item.collectionIds) {
+                $newCollIds = @($item.collectionIds | Where-Object { $_ }) + @($collectionId) | Select-Object -Unique
+            }
+            $collJson = ConvertTo-Json @($newCollIds) -Compress
+            $collBytes = [System.Text.Encoding]::UTF8.GetBytes($collJson)
+            $encodedColl = [System.Convert]::ToBase64String($collBytes)
 
-            # Base64-encoded JSON für bw edit item
-            $itemJson = $item | ConvertTo-Json -Depth 10 -Compress
-            $itemBytes = [System.Text.Encoding]::UTF8.GetBytes($itemJson)
-            $encodedItem = [System.Convert]::ToBase64String($itemBytes)
-            $result = bw edit item $item.id $encodedItem --session $session | ConvertFrom-Json
-            
-            if ($result.id) {
+            $result = bw edit item-collections $item.id $encodedColl --organizationid $OrganizationId --session $session 2>&1
+
+            $resultObj = $null
+            try { $resultObj = $result | ConvertFrom-Json } catch {}
+
+            if ($resultObj) {
                 $itemSuccess++
                 Write-Host "    ✓ $($item.name)" -ForegroundColor Gray
             } else {
-                Write-Host "    ❌ Fehlgeschlagen: $($item.name)" -ForegroundColor Red
+                Write-Host "    ❌ Fehlgeschlagen: $($item.name) - $result" -ForegroundColor Red
                 $itemFailed++
             }
         } catch {
